@@ -1,0 +1,6 @@
+Flask
+Flask-Cors
+tushare
+pandas
+gunicorn
+python-dotenv

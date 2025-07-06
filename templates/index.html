@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A股股价动态查询</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif; background-color: #111827; color: #f3f4f6; }
+        .bento-item { background-color: #1f2937; border-radius: 1rem; padding: 1.5rem; border: 1px solid #374151; transition: all 0.3s ease-in-out; }
+        #fetchDataBtn:disabled { cursor: not-allowed; background-color: #374151; }
+    </style>
+</head>
+<body class="antialiased">
+    <div class="max-w-4xl mx-auto px-4 py-16 sm:py-24">
+        <header class="text-center mb-12">
+            <h1 class="text-5xl md:text-6xl font-extrabold tracking-tight">
+                <span id="header-left" class="bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-emerald-400">A股股价</span>
+                <span class="text-gray-400">|</span>
+                <span id="header-right" class="text-gray-300">实时查询</span>
+            </h1>
+            <p class="mt-4 text-xl text-gray-400">输入股票代码或公司名称，获取最新行情</p>
+        </header>
+
+        <div class="bento-item flex flex-col sm:flex-row items-center gap-4 mb-8">
+            <label for="queryInput" class="text-lg text-gray-300 font-semibold">查询:</label>
+            <input type="text" id="queryInput" placeholder="输入代码 (如 000001.SZ) 或名称 (如 贵州茅台)" class="flex-grow w-full sm:w-auto bg-gray-900 border border-gray-700 rounded-md px-4 py-2 focus:ring-2 focus:ring-sky-500 focus:outline-none text-white">
+            <button id="fetchDataBtn" class="w-full sm:w-auto bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-6 rounded-lg transition-colors duration-300">
+                <i class="fas fa-search mr-2"></i>查询
+            </button>
+        </div>
+
+        <main id="results-grid" class="grid grid-cols-2 md:grid-cols-4 gap-6 text-center opacity-0">
+            <div class="bento-item col-span-2 md:col-span-4">
+                <h2 class="text-lg font-semibold text-sky-400">最新收盘价 (<span id="trade-date-display">-</span>)</h2>
+                <p class="text-6xl font-bold tracking-tighter mt-2"><span id="close-price">-</span></p>
+                <p class="text-2xl font-semibold mt-1" id="pct-change-display">- %</p>
+            </div>
+            <div class="bento-item"><h2 class="text-gray-400">开盘价</h2><p class="text-3xl font-bold mt-2" id="open-price">-</p></div>
+            <div class="bento-item"><h2 class="text-gray-400">最高价</h2><p class="text-3xl font-bold mt-2" id="high-price">-</p></div>
+            <div class="bento-item"><h2 class="text-gray-400">最低价</h2><p class="text-3xl font-bold mt-2" id="low-price">-</p></div>
+            <div class="bento-item"><h2 class="text-gray-400">成交量</h2><p class="text-3xl font-bold mt-2" id="volume">-</p></div>
+        </main>
+
+        <footer class="text-center mt-12 text-gray-500 text-sm">
+            <p>数据来源：Tushare Pro API</p>
+        </footer>
+    </div>
+
+    <script>
+        const fetchDataBtn = document.getElementById('fetchDataBtn');
+        const queryInput = document.getElementById('queryInput');
+        const resultsGrid = document.getElementById('results-grid');
+        const headerLeft = document.getElementById('header-left');
+        const headerRight = document.getElementById('header-right');
+
+        const resetDashboard = () => {
+            resultsGrid.style.opacity = '0';
+        };
+
+        const fetchAndDisplayData = async () => {
+            const queryValue = queryInput.value.trim();
+            if (!queryValue) { alert('请输入查询内容！'); return; }
+            
+            resetDashboard();
+            fetchDataBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>查询中...';
+            fetchDataBtn.disabled = true;
+
+            try {
+                const response = await fetch(`http://127.0.0.1:5000/api/financial-data?query=${queryValue}`);
+                const data = await response.json();
+                if (!response.ok) { throw new Error(data.error || '服务器发生未知错误'); }
+                
+                updateDashboard(data);
+                resultsGrid.style.opacity = '1';
+
+            } catch (error) {
+                alert(`获取数据失败: ${error.message}`);
+                headerLeft.textContent = 'A股股价';
+                headerRight.textContent = '实时查询';
+            } finally {
+                fetchDataBtn.innerHTML = '<i class="fas fa-search mr-2"></i>查询';
+                fetchDataBtn.disabled = false;
+            }
+        };
+
+        fetchDataBtn.addEventListener('click', fetchAndDisplayData);
+        queryInput.addEventListener('keyup', (event) => {
+            if (event.key === 'Enter') fetchAndDisplayData();
+        });
+
+// ==================== 请用这个修正版替换原来的函数 ====================
+function updateDashboard(data) {
+    // --- 核心修改：根据后端传来的新字段更新标题 ---
+    const userInput = data.userInput;
+    
+    // 修正：使用 .includes() 来检查字符串，而不是 'in'
+    const isCode = userInput.includes('.') && /\d/.test(userInput);
+    
+    if (isCode) {
+        headerLeft.textContent = data.resolvedCode;    // 左边显示代码
+        headerRight.textContent = data.resolvedName;   // 右边显示名称
+    } else {
+        headerLeft.textContent = data.resolvedName;    // 左边显示名称
+        headerRight.textContent = data.resolvedCode;   // 右边显示代码
+    }
+    
+    // --- 更新其他数据 ---
+    document.getElementById('trade-date-display').textContent = data.trade_date;
+    document.getElementById('close-price').textContent = data.close;
+    document.getElementById('open-price').textContent = data.open;
+    document.getElementById('high-price').textContent = data.high;
+    document.getElementById('low-price').textContent = data.low;
+    document.getElementById('volume').textContent = data.vol;
+    
+    const pctChangeEl = document.getElementById('pct-change-display');
+    const pctChange = parseFloat(data.pct_chg);
+    pctChangeEl.textContent = `${pctChange > 0 ? '+' : ''}${data.pct_chg} %`;
+    pctChangeEl.className = `text-2xl font-semibold mt-1 ${pctChange >= 0 ? 'text-green-400' : 'text-red-400'}`;
+}
+    </script>
+</body>
+</html>
