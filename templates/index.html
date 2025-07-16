@@ -10,7 +10,6 @@
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif; background-color: #111827; color: #f3f4f6; }
         .title-cn { font-size: 1.875rem; font-weight: 700; line-height: 1.2; }
-        .title-en { font-size: 0.875rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.1em; margin-top: 0.25rem; }
         .bento-item { background-color: #1f2937; border-radius: 1rem; padding: 1.5rem; border: 1px solid #374151; }
         .highlight-text { color: #22c55e; }
         .highlight-text-red { color: #ef4444; }
@@ -18,9 +17,7 @@
     </style>
 </head>
 <body class="antialiased">
-
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-24">
-
         <header class="text-center mb-12 bento-item">
             <h1 id="header" class="text-5xl md:text-7xl font-extrabold tracking-tight">
                 <span id="company-name" class="bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-emerald-400">A股价值</span>
@@ -39,53 +36,7 @@
         </div>
 
         <main id="results-grid" class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6 opacity-0 transition-opacity duration-700">
-            <div class="bento-item md:col-span-2 lg:col-span-2">
-                <h2 class="title-cn">年度营收 (2023)</h2>
-                <div class="mt-6 text-center">
-                    <p class="text-6xl md:text-7xl font-bold tracking-tighter">
-                        <span id="annual-revenue">-</span><span class="text-4xl text-gray-400 ml-2">亿元</span>
-                    </p>
-                    <p class="mt-3 text-2xl font-semibold" id="annual-revenue-yoy-wrapper">
-                        <i class="fas fa-arrow-up mr-2"></i><span id="annual-revenue-yoy">-</span>%
-                        <span class="text-base text-gray-400 font-normal ml-2">同比增长</span>
-                    </p>
-                </div>
-            </div>
-            
-            <div class="bento-item">
-                <h2 class="title-cn">最新股价</h2>
-                <div class="mt-4">
-                    <p class="text-5xl font-bold" id="latest-price">-</p>
-                    <p class="mt-2 text-xl font-semibold" id="pct-change-wrapper">
-                        <i class="fas fa-arrow-up mr-1"></i><span id="pct-change">-</span>%
-                    </p>
-                </div>
-            </div>
-
-            <div class="bento-item">
-                <h2 class="title-cn">毛利率 (2023)</h2>
-                <div class="mt-4">
-                    <p class="text-5xl font-bold"><span id="gross-margin">-</span><span class="text-2xl text-gray-400 ml-1">%</span></p>
-                    <p class="mt-2 text-base text-gray-400">盈利能力指标</p>
-                </div>
-            </div>
-
-            <div class="bento-item md:col-span-2">
-                 <h2 class="title-cn">年度净利 (2023)</h2>
-                 <div class="mt-6 text-center">
-                    <p class="text-6xl font-bold"><span id="net-profit">-</span><span class="text-3xl text-gray-400 ml-2">亿</span></p>
-                    <p class="mt-3 text-2xl font-semibold" id="net-profit-yoy-wrapper">
-                        <i class="fas fa-arrow-up mr-1"></i><span id="net-profit-yoy">-</span>%
-                        <span class="text-sm text-gray-400">同比增长</span>
-                    </p>
-                </div>
-            </div>
-
-            <div class="bento-item md:col-span-3 lg:col-span-4">
-                <h2 class="title-cn">近一年股价走势</h2>
-                <div id="priceHistoryChart" style="width: 100%; height: 300px;" class="mt-4"></div>
-            </div>
-        </main>
+            </main>
         
         <footer class="text-center mt-16 text-gray-500 text-sm"><p>数据来源：Tushare Pro API</p></footer>
     </div>
@@ -94,10 +45,12 @@
         const queryInput = document.getElementById('queryInput');
         const fetchDataBtn = document.getElementById('fetchDataBtn');
         const resultsGrid = document.getElementById('results-grid');
-        var priceHistoryChart = echarts.init(document.getElementById('priceHistoryChart'));
+        
+        let priceHistoryChart = null; // Hold chart instance
 
         const resetDashboard = () => {
             resultsGrid.style.opacity = '0';
+            resultsGrid.innerHTML = ''; // Clear previous results
         };
 
         const fetchAndDisplayData = async () => {
@@ -126,62 +79,80 @@
             }
         };
 
+        const createBentoBox = (htmlContent, classList) => {
+            const div = document.createElement('div');
+            div.className = `bento-item ${classList}`;
+            div.innerHTML = htmlContent;
+            return div;
+        };
+
+        const updateDashboard = (data) => {
+            document.getElementById('company-name').textContent = data.companyName;
+            document.getElementById('stock-code').textContent = data.stockCode;
+
+            const { latestPrice, annualReport2023, priceHistory } = data;
+
+            const revenueBox = createBentoBox(`
+                <h2 class="title-cn">年度营收 (2023)</h2>
+                <div class="mt-6 text-center">
+                    <p class="text-6xl md:text-7xl font-bold tracking-tighter">${annualReport2023.revenue}<span class="text-4xl text-gray-400 ml-2">亿元</span></p>
+                    <p class="mt-3 text-2xl font-semibold ${parseFloat(annualReport2023.revenue_yoy) >= 0 ? 'highlight-text' : 'highlight-text-red'}">
+                        <i class="fas ${parseFloat(annualReport2023.revenue_yoy) >= 0 ? 'fa-arrow-up' : 'fa-arrow-down'} mr-2"></i>${parseFloat(annualReport2023.revenue_yoy) > 0 ? '+' : ''}${annualReport2023.revenue_yoy}%
+                        <span class="text-base text-gray-400 font-normal ml-2">同比增长</span>
+                    </p>
+                </div>`, 'md:col-span-2 lg:col-span-2');
+
+            const priceBox = createBentoBox(`
+                <h2 class="title-cn">最新股价</h2>
+                <div class="mt-4">
+                    <p class="text-5xl font-bold">${latestPrice.close}</p>
+                    <p class="mt-2 text-xl font-semibold ${parseFloat(latestPrice.pct_chg) >= 0 ? 'highlight-text' : 'highlight-text-red'}">
+                        <i class="fas ${parseFloat(latestPrice.pct_chg) >= 0 ? 'fa-arrow-up' : 'fa-arrow-down'} mr-1"></i>${parseFloat(latestPrice.pct_chg) > 0 ? '+' : ''}${latestPrice.pct_chg}%
+                    </p>
+                </div>`, '');
+
+            const marginBox = createBentoBox(`
+                <h2 class="title-cn">毛利率 (2023)</h2>
+                <div class="mt-4">
+                    <p class="text-5xl font-bold">${annualReport2023.gross_margin}<span class="text-2xl text-gray-400 ml-1">%</span></p>
+                    <p class="mt-2 text-base text-gray-400">盈利能力指标</p>
+                </div>`, '');
+
+            const profitBox = createBentoBox(`
+                <h2 class="title-cn">年度净利 (2023)</h2>
+                <div class="mt-6 text-center">
+                    <p class="text-6xl font-bold">${annualReport2023.net_profit}<span class="text-3xl text-gray-400 ml-2">亿</span></p>
+                    <p class="mt-3 text-2xl font-semibold ${parseFloat(annualReport2023.net_profit_yoy) >= 0 ? 'highlight-text' : 'highlight-text-red'}">
+                        <i class="fas ${parseFloat(annualReport2023.net_profit_yoy) >= 0 ? 'fa-arrow-up' : 'fa-arrow-down'} mr-1"></i>${parseFloat(annualReport2023.net_profit_yoy) > 0 ? '+' : ''}${annualReport2023.net_profit_yoy}%
+                        <span class="text-sm text-gray-400">同比增长</span>
+                    </p>
+                </div>`, 'md:col-span-2');
+            
+            const chartBox = createBentoBox(`
+                <h2 class="title-cn">近一年股价走势</h2>
+                <div id="priceHistoryChart" style="width: 100%; height: 300px;" class="mt-4"></div>`, 'md:col-span-3 lg:col-span-4');
+
+            resultsGrid.append(revenueBox, priceBox, marginBox, profitBox, chartBox);
+
+            if (priceHistoryChart) priceHistoryChart.dispose();
+            priceHistoryChart = echarts.init(document.getElementById('priceHistoryChart'));
+            const chartOption = {
+                tooltip: { trigger: 'axis' },
+                xAxis: { type: 'category', data: priceHistory.map(item => item[0]) },
+                yAxis: { type: 'value', scale: true },
+                series: [{ data: priceHistory.map(item => item[1]), type: 'line', smooth: true, symbol: 'none', lineStyle: { color: '#3b82f6' } }],
+                grid: { left: '5%', right: '5%', top: '10%', bottom: '10%' },
+            };
+            priceHistoryChart.setOption(chartOption);
+        };
+        
         fetchDataBtn.addEventListener('click', fetchAndDisplayData);
         queryInput.addEventListener('keyup', (event) => {
             if (event.key === 'Enter') fetchAndDisplayData();
         });
 
-        const updateNumberAndArrow = (value, elementId, wrapperId) => {
-            const num = parseFloat(value);
-            const el = document.getElementById(elementId);
-            const wrapper = document.getElementById(wrapperId);
-            
-            el.textContent = `${num > 0 ? '+' : ''}${value}`;
-            wrapper.className = `mt-3 text-2xl font-semibold ${num >= 0 ? 'highlight-text' : 'highlight-text-red'}`;
-            wrapper.querySelector('i').className = `fas mr-2 ${num >= 0 ? 'fa-arrow-up' : 'fa-arrow-down'}`;
-        };
-
-        function updateDashboard(data) {
-            // 更新标题
-            document.getElementById('company-name').textContent = data.companyName;
-            document.getElementById('stock-code').textContent = data.stockCode;
-
-            // 更新数据块
-            document.getElementById('annual-revenue').textContent = data.annualReport2023.revenue;
-            document.getElementById('net-profit').textContent = data.annualReport2023.net_profit;
-            document.getElementById('gross-margin').textContent = data.annualReport2023.gross_margin;
-            document.getElementById('latest-price').textContent = data.latestPrice.close;
-
-            // 更新带箭头的百分比
-            updateNumberAndArrow(data.annualReport2023.revenue_yoy, 'annual-revenue-yoy', 'annual-revenue-yoy-wrapper');
-            updateNumberAndArrow(data.annualReport2023.net_profit_yoy, 'net-profit-yoy', 'net-profit-yoy-wrapper');
-            // 单独处理股价涨跌幅
-            const pctChangeNum = parseFloat(data.latestPrice.pct_chg);
-            const pctChangeEl = document.getElementById('pct-change');
-            const pctChangeWrapper = document.getElementById('pct-change-wrapper');
-            pctChangeEl.textContent = `${pctChangeNum > 0 ? '+' : ''}${data.latestPrice.pct_chg}`;
-            pctChangeWrapper.className = `mt-2 text-xl font-semibold ${pctChangeNum >= 0 ? 'highlight-text' : 'highlight-text-red'}`;
-            pctChangeWrapper.querySelector('i').className = `fas mr-1 ${pctChangeNum >= 0 ? 'fa-arrow-up' : 'fa-arrow-down'}`;
-
-            // 更新图表
-            const chartOption = {
-                tooltip: { trigger: 'axis' },
-                xAxis: { type: 'category', data: data.priceHistory.map(item => item[0]) },
-                yAxis: { type: 'value', scale: true },
-                series: [{
-                    data: data.priceHistory.map(item => item[1]),
-                    type: 'line',
-                    smooth: true,
-                    symbol: 'none',
-                    lineStyle: { color: '#3b82f6' }
-                }],
-                grid: { left: '5%', right: '5%', top: '10%', bottom: '10%' },
-            };
-            priceHistoryChart.setOption(chartOption);
-        }
-        
-        window.addEventListener('resize', function() {
-            priceHistoryChart.resize();
+        window.addEventListener('resize', () => {
+            if (priceHistoryChart) priceHistoryChart.resize();
         });
     </script>
 </body>
