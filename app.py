@@ -1,5 +1,4 @@
 import os
-import math
 import traceback
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
@@ -8,101 +7,81 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import pandas as pd
 
+# --- 1. 初始化: 加载环境变量并设置Tushare Token ---
 load_dotenv()
+TUSHARE_TOKEN = os.getenv('TUSHARE_TOKEN')
+if not TUSHARE_TOKEN:
+    raise RuntimeError('错误: 请在 .env 文件中设置您的 TUSHARE_TOKEN')
 
-app = Flask(__name__)
+ts.set_token(TUSHARE_TOKEN)
+pro = ts.pro_api()
+
+# --- 2. 初始化 Flask 应用 ---
+app = Flask(__name__, template_folder='templates')
 CORS(app)
 
-def safe_format(value, format_spec="{:.2f}", default_val='-'):
-    if value is None or not isinstance(value, (int, float)) or math.isnan(value):
-        return default_val
-    try:
-        return format(value, format_spec)
-    except (ValueError, TypeError):
-        return default_val
 
 @app.route('/')
-def home():
+def index():
+    """渲染主页面"""
     return render_template('index.html')
 
 
-@app.route('/api/financial-data', methods=['GET'])
+@app.route('/api/financial-data')
 def get_financial_data():
-    TUSHARE_TOKEN = os.environ.get('TUSHARE_TOKEN')
-    if not TUSHARE_TOKEN:
-        print("CRITICAL: TUSHARE_TOKEN environment variable not set!")
-        return jsonify({"error": "服务器配置错误"}), 500
-    
-    pro = ts.pro_api(TUSHARE_TOKEN)
-    query_str = request.args.get('query')
-    if not query_str:
-        return jsonify({"error": "查询内容不能为空"}), 400
-
-    ts_code = ''
-    company_name = ''
+    """处理前端的数据查询请求"""
+    query = request.args.get('query', '').strip()
+    if not query:
+        return jsonify({'error': '查询参数不能为空'}), 400
 
     try:
-        if '.' in query_str and any(char.isdigit() for char in query_str):
-            ts_code = query_str
-            basic_info = pro.stock_basic(ts_code=ts_code, fields='name')
-            if basic_info.empty:
-                return jsonify({"error": f"股票代码 '{ts_code}' 无效或不存在"}), 404
-            company_name = basic_info.iloc[0]['name']
+        # --- 步骤 1: 获取公司代码(ts_code) ---
+        # 判断输入是代码还是公司名称
+        if '.' in query or (query.isdigit() and len(query) == 6):
+            ts_code = query.upper()
         else:
-            search_results = pro.stock_basic(keyword=query_str, list_status='L', fields='ts_code,name')
-            if search_results.empty:
-                return jsonify({"error": f"找不到公司 '{query_str}'"}), 404
-            ts_code = search_results.iloc[0]['ts_code']
-            company_name = search_results.iloc[0]['name']
+            # 如果是名称，则从所有A股列表中模糊查询
+            # 注意: 此操作会加载所有股票列表，在首次查询时可能稍慢
+            df_name = pro.stock_basic(exchange='', list_status='L', fields='ts_code,name')
+            match = df_name[df_name['name'].str.contains(query)]
+            if match.empty:
+                return jsonify({'error': f'未找到名称包含“{query}”的公司'}), 404
+            ts_code = match.iloc[0]['ts_code']
+
+        # --- 步骤 2: 并行获取所有需要的数据 ---
+        today = datetime.now().strftime('%Y%m%d')
+        start_date_year_ago = (datetime.now() - timedelta(days=365)).strftime('%Y%m%d')
+
+        # a) 公司基础信息
+        basic_df = pro.stock_basic(ts_code=ts_code, fields='ts_code,name,industry,area,list_date')
+        
+        # b) 最新财务指标 (这里我们获取最新的，Tushare会自动选择最近的报告期)
+        metrics_df = pro.fina_indicator(ts_code=ts_code, limit=1, fields='end_date,roe,roa,netprofit_margin')
+        
+        # c) 最近4期利润表
+        income_df = pro.income(ts_code=ts_code, limit=4, fields='end_date,total_revenue,n_income')
+        income_df.rename(columns={'n_income': 'net_profit'}, inplace=True) # 字段重命名以方便前端使用
+        
+        # d) 当日最新股价
+        price_df = pro.daily(ts_code=ts_code, start_date=today, end_date=today, fields='trade_date,open,high,low,close,pre_close,pct_chg')
+        
+        # e) 近一年历史股价
+        history_df = pro.daily(ts_code=ts_code, start_date=start_date_year_ago, end_date=today, fields='trade_date,close')
+
+        # --- 步骤 3: 将数据整理成JSON格式 ---
+        # to_dict('records') 会将DataFrame转换为字典列表，非常适合JSON
+        return jsonify({
+            'basicInfo': basic_df.iloc[0].to_dict() if not basic_df.empty else {},
+            'metrics': metrics_df.to_dict(orient='records'),
+            'incomeStatements': income_df.sort_values('end_date', ascending=False).to_dict(orient='records'),
+            'latestPrice': price_df.iloc[0].to_dict() if not price_df.empty else {},
+            'priceHistory': history_df.sort_values('trade_date').values.tolist() if not history_df.empty else []
+        })
+
     except Exception as e:
-        return jsonify({"error": f"查询公司代码时出错: {e}"}), 500
+        traceback.print_exc() # 在服务器端打印详细错误，方便调试
+        return jsonify({'error': f'查询过程中发生错误：{str(e)}'}), 500
 
-    if not ts_code:
-        return jsonify({"error": "未能确定有效的股票代码"}), 400
-
-    try:
-        # --- 一次性抓取所有需要的数据 ---
-        daily_info_df = pro.daily(ts_code=ts_code, limit=1)
-        income_df = pro.income(ts_code=ts_code, end_date='20231231', fields='total_revenue,n_income_attr_p')
-        indicator_df = pro.fina_indicator(ts_code=ts_code, end_date='20231231', fields='or_yoy,netprofit_yoy,grossprofit_margin')
-        
-        end_date = datetime.now().strftime('%Y%m%d')
-        start_date = (datetime.now() - timedelta(days=365)).strftime('%Y%m%d')
-        history_price_df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date, fields='trade_date,close')
-
-        # --- 安全地提取每一个值 ---
-        latest_close = daily_info_df.iloc[0]['close'] if not daily_info_df.empty else None
-        latest_pct_chg = daily_info_df.iloc[0]['pct_chg'] if not daily_info_df.empty else None
-        
-        revenue = income_df.iloc[0]['total_revenue'] if not income_df.empty else None
-        net_profit = income_df.iloc[0]['n_income_attr_p'] if not income_df.empty else None
-        
-        revenue_yoy = indicator_df.iloc[0]['or_yoy'] if not indicator_df.empty else None
-        net_profit_yoy = indicator_df.iloc[0]['netprofit_yoy'] if not indicator_df.empty else None
-        gross_margin = indicator_df.iloc[0]['grossprofit_margin'] if not indicator_df.empty else None
-
-        # --- 使用安全格式化函数整合最终数据 ---
-        data = {
-            "companyName": company_name,
-            "stockCode": ts_code,
-            "latestPrice": {
-                "close": safe_format(latest_close),
-                "pct_chg": safe_format(latest_pct_chg)
-            },
-            "annualReport2023": {
-                "revenue": safe_format(revenue / 1e8 if revenue else None),
-                "revenue_yoy": safe_format(revenue_yoy),
-                "net_profit": safe_format(net_profit / 1e8 if net_profit else None),
-                "net_profit_yoy": safe_format(net_profit_yoy),
-                "gross_margin": safe_format(gross_margin)
-            },
-            "priceHistory": history_price_df.sort_values('trade_date').values.tolist() if not history_price_df.empty else []
-        }
-        return jsonify(data)
-    except Exception as e:
-        tb_str = traceback.format_exc()
-        print(f"--- FATAL ERROR TRACEBACK ---\n{tb_str}\n--- END OF TRACEBACK ---")
-        return jsonify({"error": f"获取财务数据时发生意外错误: {e}"}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
