@@ -3,6 +3,7 @@ from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import tushare as ts
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -28,60 +29,68 @@ def get_financial_data():
 
     ts_code = ''
     company_name = ''
-    
-    # --- 全新的、更清晰的判断与查询逻辑 ---
-    # 假设输入的是代码
+
+    # --- 智能判断输入类型 ---
     if '.' in query_str and any(char.isdigit() for char in query_str):
         ts_code = query_str
-        try:
-            # 尝试用代码查名称 (需要积分)
-            name_result = pro.stock_basic(ts_code=ts_code, fields='name')
-            company_name = name_result.iloc[0]['name'] if not name_result.empty else ts_code
-        except Exception:
-            # 积分不够或查询失败，则名称也用代码代替
-            company_name = ts_code
-    # 假设输入的是名称
     else:
-        company_name = query_str
         try:
-            # 尝试用名称查代码 (需要积分)
             search_results = pro.stock_basic(keyword=query_str, fields='ts_code,name')
-            if search_results.empty:
-                return jsonify({"error": f"找不到公司名称为 '{query_str}' 的股票"}), 404
-            
+            if search_results.empty: return jsonify({"error": f"找不到公司 '{query_str}'"}), 404
             ts_code = search_results.iloc[0]['ts_code']
-            company_name = search_results.iloc[0]['name'] # 使用Tushare返回的官方名称
         except Exception as e:
-            return jsonify({"error": f"查询公司代码时出错，Tushare积分可能不足。错误: {e}"}), 500
+            return jsonify({"error": f"查询公司代码时出错: {e}"}), 500
     
-    if not ts_code:
-        return jsonify({"error": "未能确定有效的股票代码"}), 400
+    if not ts_code: return jsonify({"error": "未能确定有效的股票代码"}), 400
 
-    # --- 使用确定的 ts_code 查询行情数据 ---
     try:
-        df = pro.daily(ts_code=ts_code, limit=1)
-        if df.empty:
-            return jsonify({"error": f"无法获取 {ts_code} 的日线行情数据"}), 404
+        # --- 抓取多维度数据 ---
+        # 1. 公司基本信息 (获取公司名)
+        basic_info = pro.stock_basic(ts_code=ts_code, fields='ts_code,name')
+        company_name = basic_info.iloc[0]['name'] if not basic_info.empty else ts_code
 
-        latest_trade_info = df.iloc[0]
+        # 2. 最新日线行情
+        daily_info = pro.daily(ts_code=ts_code, limit=1).iloc[0]
+
+        # 3. 利润表数据 (获取2023年报)
+        income_df = pro.income(ts_code=ts_code, end_date='20231231', fields='total_revenue,n_income_attr_p')
+        annual_revenue_2023 = income_df.iloc[0]['total_revenue']
+        net_profit_2023 = income_df.iloc[0]['n_income_attr_p']
         
-        # --- 准备最终发送给前端的数据包 ---
+        # 4. 财务指标 (获取同比增长率和毛利率)
+        indicator_df = pro.fina_indicator(ts_code=ts_code, end_date='20231231', fields='or_yoy,netprofit_yoy,grossprofit_margin')
+        revenue_yoy = indicator_df.iloc[0]['or_yoy']
+        net_profit_yoy = indicator_df.iloc[0]['netprofit_yoy']
+        gross_margin = indicator_df.iloc[0]['grossprofit_margin']
+
+        # 5. 历史股价数据 (用于绘制图表，获取最近一年的数据)
+        end_date = datetime.now().strftime('%Y%m%d')
+        start_date = (datetime.now() - timedelta(days=365)).strftime('%Y%m%d')
+        history_price_df = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date, fields='trade_date,close')
+        # 转换格式以便ECharts使用
+        history_price_data = history_price_df.sort_values('trade_date').values.tolist()
+
+        # --- 整合所有数据到一个包里 ---
         data = {
-            "userInput": query_str,        # 用户的原始输入
-            "resolvedName": company_name,  # 解析出的公司名
-            "resolvedCode": ts_code,       # 解析出的股票代码
-            "trade_date": latest_trade_info['trade_date'],
-            "close": f"{latest_trade_info['close']:.2f}",
-            "open": f"{latest_trade_info['open']:.2f}",
-            "high": f"{latest_trade_info['high']:.2f}",
-            "low": f"{latest_trade_info['low']:.2f}",
-            "vol": f"{(latest_trade_info['vol'] / 100):.2f} 万手",
-            "pct_chg": f"{latest_trade_info['pct_chg']:.2f}"
+            "companyName": company_name,
+            "stockCode": ts_code,
+            "latestPrice": {
+                "close": f"{daily_info['close']:.2f}",
+                "pct_chg": f"{daily_info['pct_chg']:.2f}",
+            },
+            "annualReport2023": {
+                "revenue": f"{(annual_revenue_2023 / 1e8):.2f}",
+                "revenue_yoy": f"{revenue_yoy:.2f}",
+                "net_profit": f"{(net_profit_2023 / 1e8):.2f}",
+                "net_profit_yoy": f"{net_profit_yoy:.2f}",
+                "gross_margin": f"{gross_margin:.2f}",
+            },
+            "priceHistory": history_price_data
         }
         
         return jsonify(data)
     except Exception as e:
-        return jsonify({"error": f"获取行情数据时发生错误: {e}"}), 500
+        return jsonify({"error": f"获取公司数据时发生错误，请确认该公司是否已上市并有2023年报数据。错误: {e}"}), 500
 
 
 if __name__ == '__main__':
