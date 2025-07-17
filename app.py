@@ -13,6 +13,7 @@ TUSHARE_TOKEN = os.getenv('TUSHARE_TOKEN')
 if not TUSHARE_TOKEN:
     raise RuntimeError('错误: 请在 .env 文件中设置您的 TUSHARE_TOKEN')
 
+# 注意: get_realtime_quotes 是从旧的ts接口调用，而pro接口用于其他数据
 ts.set_token(TUSHARE_TOKEN)
 pro = ts.pro_api()
 
@@ -36,17 +37,17 @@ def get_financial_data():
 
     try:
         # --- 步骤 1: 获取公司代码(ts_code) ---
-        # 判断输入是代码还是公司名称
         if '.' in query or (query.isdigit() and len(query) == 6):
             ts_code = query.upper()
         else:
-            # 如果是名称，则从所有A股列表中模糊查询
-            # 注意: 此操作会加载所有股票列表，在首次查询时可能稍慢
             df_name = pro.stock_basic(exchange='', list_status='L', fields='ts_code,name')
             match = df_name[df_name['name'].str.contains(query)]
             if match.empty:
                 return jsonify({'error': f'未找到名称包含“{query}”的公司'}), 404
             ts_code = match.iloc[0]['ts_code']
+        
+        # 实时行情接口需要的是纯数字代码
+        stock_code_for_realtime = ts_code.split('.')[0]
 
         # --- 步骤 2: 并行获取所有需要的数据 ---
         today = datetime.now().strftime('%Y%m%d')
@@ -55,31 +56,49 @@ def get_financial_data():
         # a) 公司基础信息
         basic_df = pro.stock_basic(ts_code=ts_code, fields='ts_code,name,industry,area,list_date')
         
-        # b) 最新财务指标 (这里我们获取最新的，Tushare会自动选择最近的报告期)
+        # b) 最新财务指标
         metrics_df = pro.fina_indicator(ts_code=ts_code, limit=1, fields='end_date,roe,roa,netprofit_margin')
         
         # c) 最近4期利润表
         income_df = pro.income(ts_code=ts_code, limit=4, fields='end_date,total_revenue,n_income')
-        income_df.rename(columns={'n_income': 'net_profit'}, inplace=True) # 字段重命名以方便前端使用
+        income_df.rename(columns={'n_income': 'net_profit'}, inplace=True)
         
-        # d) 当日最新股价
-        price_df = pro.daily(ts_code=ts_code, start_date=today, end_date=today, fields='trade_date,open,high,low,close,pre_close,pct_chg')
+        # d) 【核心修改】获取盘中实时股价
+        realtime_df = ts.get_realtime_quotes(stock_code_for_realtime)
         
         # e) 近一年历史股价
         history_df = pro.daily(ts_code=ts_code, start_date=start_date_year_ago, end_date=today, fields='trade_date,close')
 
         # --- 步骤 3: 将数据整理成JSON格式 ---
-        # to_dict('records') 会将DataFrame转换为字典列表，非常适合JSON
+        
+        # 处理实时股价数据
+        latest_price_data = {}
+        if realtime_df is not None and not realtime_df.empty:
+            realtime_quote = realtime_df.iloc[0]
+            pre_close = float(realtime_quote['pre_close'])
+            price = float(realtime_quote['price'])
+            pct_chg = ((price - pre_close) / pre_close * 100) if pre_close != 0 else 0
+            
+            latest_price_data = {
+                'trade_date': realtime_quote['date'],
+                'open': realtime_quote['open'],
+                'high': realtime_quote['high'],
+                'low': realtime_quote['low'],
+                'close': realtime_quote['price'], # 实时价格在'price'字段
+                'pre_close': realtime_quote['pre_close'],
+                'pct_chg': f"{pct_chg:.2f}"
+            }
+        
         return jsonify({
             'basicInfo': basic_df.iloc[0].to_dict() if not basic_df.empty else {},
             'metrics': metrics_df.to_dict(orient='records'),
             'incomeStatements': income_df.sort_values('end_date', ascending=False).to_dict(orient='records'),
-            'latestPrice': price_df.iloc[0].to_dict() if not price_df.empty else {},
+            'latestPrice': latest_price_data,
             'priceHistory': history_df.sort_values('trade_date').values.tolist() if not history_df.empty else []
         })
 
     except Exception as e:
-        traceback.print_exc() # 在服务器端打印详细错误，方便调试
+        traceback.print_exc()
         return jsonify({'error': f'查询过程中发生错误：{str(e)}'}), 500
 
 
